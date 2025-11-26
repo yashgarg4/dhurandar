@@ -1,4 +1,3 @@
-<!-- File: index.html -->
 <!DOCTYPE html>
 <html>
   <head>
@@ -56,8 +55,8 @@
         justify-content: center;
         background: rgba(0, 0, 0, 0.6);
         z-index: 99999;
-        /* default non-interactive when hidden */
-        pointer-events: none;
+        pointer-events: none; /* non-interactive when hidden */
+        -webkit-tap-highlight-color: transparent;
       }
       .pipepuzzle_iframe {
         width: 960px;
@@ -66,6 +65,7 @@
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
         border-radius: 8px;
         background: #000;
+        touch-action: auto;
       }
       @media (max-width: 1000px) {
         .pipepuzzle_iframe {
@@ -74,7 +74,6 @@
           border-radius: 0;
         }
       }
-      /* Optional close hint */
       #pipepuzzle_close_hint {
         position: absolute;
         top: 12px;
@@ -100,22 +99,19 @@
       role="dialog"
       tabindex="-1"
     >
-      <!-- <div id="pipepuzzle_close_hint">Tap outside to close</div> -->
-      <!-- iframe inserted dynamically -->
+      <div id="pipepuzzle_close_hint">Tap outside to close</div>
+      <!-- iframe will be inserted dynamically -->
     </div>
 
     <script>
-      // Integration script - dynamic iframe lifecycle to avoid stale pointer capture
       (function () {
         const iframeWrap = document.getElementById("pipepuzzle_iframe_wrap");
         const closeHint = document.getElementById("pipepuzzle_close_hint");
-        // Path inside export where PipePuzzlee is placed (adjust if needed)
         const PIPE_URL = "./PipePuzzlee/index.html";
         let iframe = null;
 
-        // Utility: find game canvas (best-effort)
+        // prefer common Construct canvas ids, else first canvas
         function findGameCanvas() {
-          // prefer common Construct canvas ids if present, else first canvas
           return (
             document.getElementById("c2canvas") ||
             document.getElementById("c3canvas") ||
@@ -123,53 +119,94 @@
           );
         }
 
-        // wake parent input by focusing + dispatching pointer events
-        function wakeParentInput() {
+        // attempt to "wake" touch/pointer handling on Android Chrome
+        function wakeParentInput(retryCount = 2) {
           try {
-            // Allow body and game container to receive pointers
+            // restore page pointer behavior
             document.body.style.pointerEvents = "auto";
             document.body.style.touchAction = "auto";
-            // Focus window and canvas
-            if (window.focus) window.focus();
+
+            // blur any focused element (e.g., input inside iframe previously)
+            try {
+              document.activeElement &&
+                document.activeElement.blur &&
+                document.activeElement.blur();
+            } catch (e) {}
+
+            // focus window
+            try {
+              window.focus && window.focus();
+            } catch (e) {}
+
             const canvas = findGameCanvas();
+            // set canvas touch-action to auto (defensive)
             if (canvas) {
-              if (typeof canvas.focus === "function") {
-                try {
-                  canvas.focus();
-                } catch (e) {}
-              }
-              // dispatch pointer and mouse fallback events
               try {
-                const pUp = new PointerEvent("pointerup", {
+                canvas.style.touchAction = "auto";
+              } catch (e) {}
+              try {
+                canvas.style.pointerEvents = "auto";
+              } catch (e) {}
+              try {
+                canvas.focus && canvas.focus();
+              } catch (e) {}
+            }
+
+            // helper to dispatch pointer events safely
+            function dispatchPointerEvents(target) {
+              if (!target) return;
+              try {
+                const down = new PointerEvent("pointerdown", {
                   bubbles: true,
                   cancelable: true,
                 });
-                canvas.dispatchEvent(pUp);
-                const pCancel = new PointerEvent("pointercancel", {
+                const up = new PointerEvent("pointerup", {
                   bubbles: true,
                   cancelable: true,
                 });
-                canvas.dispatchEvent(pCancel);
+                const cancel = new PointerEvent("pointercancel", {
+                  bubbles: true,
+                  cancelable: true,
+                });
+                target.dispatchEvent(down);
+                target.dispatchEvent(up);
+                target.dispatchEvent(cancel);
               } catch (e) {
+                // fallback to mouse events if PointerEvent not allowed
                 try {
                   const mu = new MouseEvent("mouseup", {
                     bubbles: true,
                     cancelable: true,
                   });
-                  canvas.dispatchEvent(mu);
+                  target.dispatchEvent(mu);
                 } catch (ee) {}
               }
+            }
+
+            // dispatch to canvas
+            if (canvas) dispatchPointerEvents(canvas);
+
+            // dispatch to center of viewport element (elementFromPoint) — helps Android Chrome release capture
+            try {
+              const cx = Math.round(window.innerWidth / 2);
+              const cy = Math.round(window.innerHeight / 2);
+              const el = document.elementFromPoint(cx, cy);
+              if (el && el !== iframeWrap) dispatchPointerEvents(el);
+            } catch (e) {}
+
+            // small retry: run again after 80ms to increase reliability
+            if (retryCount > 0) {
+              setTimeout(() => wakeParentInput(retryCount - 1), 80);
             }
           } catch (e) {
             console.warn("wakeParentInput failed", e);
           }
         }
 
-        // open: create iframe, attach, show overlay and enable pointer-events
+        // open iframe
         window.openPipePuzzle = function (url) {
           try {
-            // If already open, ignore
-            if (iframe) return;
+            if (iframe) return; // already open
             iframe = document.createElement("iframe");
             iframe.className = "pipepuzzle_iframe";
             iframe.id = "pipepuzzle_iframe";
@@ -179,16 +216,15 @@
               "allow",
               "fullscreen; autoplay; clipboard-read; clipboard-write"
             );
-            // Prevent clicks inside iframe from closing overlay: stop propagation on wrapper click handler by checking target
             iframeWrap.appendChild(iframe);
 
-            // show overlay and make interactive
+            // show overlay and make it interactive
             iframeWrap.style.display = "flex";
             iframeWrap.classList.add("show");
             iframeWrap.style.pointerEvents = "auto";
             iframeWrap.setAttribute("aria-hidden", "false");
 
-            // try focusing iframe after load for keyboard input
+            // focus iframe after load
             iframe.addEventListener(
               "load",
               () => {
@@ -205,15 +241,13 @@
           }
         };
 
-        // close: remove iframe element, hide overlay, restore parent input and wake it
+        // close iframe: remove and wake parent
         window.closePipePuzzle = function () {
           try {
             if (iframe) {
-              // try best-effort to stop iframe internal activity
               try {
                 iframe.src = "about:blank";
               } catch (e) {}
-              // remove DOM node
               try {
                 iframe.remove();
               } catch (e) {
@@ -221,36 +255,35 @@
               }
               iframe = null;
             }
+
             // hide overlay and make it non-interactive
             iframeWrap.style.display = "none";
             iframeWrap.classList.remove("show");
             iframeWrap.style.pointerEvents = "none";
             iframeWrap.setAttribute("aria-hidden", "true");
 
-            // small delay to allow DOM reflow before waking input
-            setTimeout(wakeParentInput, 40);
+            // small delay then aggressively wake parent input (Android Chrome often needs this)
+            setTimeout(() => wakeParentInput(2), 40);
           } catch (e) {
             console.warn("closePipePuzzle error", e);
           }
         };
 
-        // Close when clicking outside iframe (overlay background). If click target is the wrapper (not the iframe), close.
+        // close when clicking outside iframe
         iframeWrap.addEventListener("click", function (ev) {
-          // if click/touch was directly on wrapper (not inside iframe), close
           if (ev.target === iframeWrap) {
-            // allow a short delay to avoid accidental taps closing immediately
             window.closePipePuzzle && window.closePipePuzzle();
           }
         });
 
-        // Also handle escape key to close overlay
+        // allow Escape to close
         window.addEventListener("keydown", function (ev) {
           if (ev.key === "Escape" && iframe) {
             window.closePipePuzzle && window.closePipePuzzle();
           }
         });
 
-        // PostMessage listener from PipePuzzle iframe
+        // handle messages from iframe
         window.addEventListener(
           "message",
           function (event) {
@@ -290,7 +323,6 @@
           false
         );
 
-        // Debug helper
         console.log(
           "PipePuzzle integration ready. Call window.openPipePuzzle() to open the embedded level."
         );
