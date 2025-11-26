@@ -1,3 +1,4 @@
+<!-- File: index.html -->
 <!DOCTYPE html>
 <html>
   <head>
@@ -7,18 +8,13 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no"
     />
-
-    <!-- Made with Construct, the game and app creator :: https://www.construct.net -->
     <meta name="generator" content="Scirra Construct" />
-
     <meta name="author" content="JioGames" />
-
     <link rel="manifest" href="appmanifest.json" />
     <link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128.png" />
     <link rel="apple-touch-icon" sizes="256x256" href="icons/icon-256.png" />
     <link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png" />
     <link rel="icon" type="image/png" href="icons/icon-512.png" />
-
     <link rel="stylesheet" href="style.css" />
   </head>
 
@@ -40,13 +36,14 @@
         </p>
       </div>
     </noscript>
+
     <script src="scripts/modernjscheck.js"></script>
     <script src="scripts/supportcheck.js"></script>
     <script src="scripts/offlineclient.js" type="module"></script>
     <script src="scripts/main.js" type="module"></script>
     <script src="scripts/register-sw.js" type="module"></script>
 
-    <!-- PipePuzzle iframe overlay (added by integrator) -->
+    <!-- PipePuzzle iframe overlay (integrator) -->
     <style>
       #pipepuzzle_iframe_wrap {
         position: fixed;
@@ -59,77 +56,213 @@
         justify-content: center;
         background: rgba(0, 0, 0, 0.6);
         z-index: 99999;
+        /* default non-interactive when hidden */
+        pointer-events: none;
       }
-      #pipepuzzle_iframe {
+      .pipepuzzle_iframe {
         width: 960px;
         height: 640px;
         border: none;
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
         border-radius: 8px;
+        background: #000;
       }
       @media (max-width: 1000px) {
-        #pipepuzzle_iframe {
+        .pipepuzzle_iframe {
           width: 100%;
           height: 100%;
+          border-radius: 0;
         }
+      }
+      /* Optional close hint */
+      #pipepuzzle_close_hint {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        z-index: 100000;
+        background: rgba(0, 0, 0, 0.5);
+        color: #fff;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 14px;
+        user-select: none;
+        -webkit-user-select: none;
+        display: none;
+      }
+      #pipepuzzle_iframe_wrap.show #pipepuzzle_close_hint {
+        display: block;
       }
     </style>
 
     <div
       id="pipepuzzle_iframe_wrap"
-      onclick="window.closePipePuzzle && window.closePipePuzzle()"
+      aria-hidden="true"
+      role="dialog"
+      tabindex="-1"
     >
-      <iframe id="pipepuzzle_iframe" src="" title="PipePuzzle"></iframe>
+      <div id="pipepuzzle_close_hint">Tap outside to close</div>
+      <!-- iframe inserted dynamically -->
     </div>
 
     <script>
-      // Integration script to open/close iframe and handle postMessage from PipePuzzle
+      // Integration script - dynamic iframe lifecycle to avoid stale pointer capture
       (function () {
         const iframeWrap = document.getElementById("pipepuzzle_iframe_wrap");
-        const iframe = document.getElementById("pipepuzzle_iframe");
-
-        // Set this to the relative path inside exported build where PipePuzzlee is placed.
-        // We placed the PipePuzzlee folder next to Dhurandar folder in the exported package.
+        const closeHint = document.getElementById("pipepuzzle_close_hint");
+        // Path inside export where PipePuzzlee is placed (adjust if needed)
         const PIPE_URL = "./PipePuzzlee/index.html";
+        let iframe = null;
 
-        window.openPipePuzzle = function (url) {
-          iframe.src = url || PIPE_URL;
-          iframeWrap.style.display = "flex";
-          // try focusing iframe after load for keyboard input
-          iframe.addEventListener(
-            "load",
-            () => {
-              try {
-                iframe.contentWindow.focus();
-              } catch (e) {}
-            },
-            { once: true }
+        // Utility: find game canvas (best-effort)
+        function findGameCanvas() {
+          // prefer common Construct canvas ids if present, else first canvas
+          return (
+            document.getElementById("c2canvas") ||
+            document.getElementById("c3canvas") ||
+            document.querySelector("canvas")
           );
+        }
+
+        // wake parent input by focusing + dispatching pointer events
+        function wakeParentInput() {
+          try {
+            // Allow body and game container to receive pointers
+            document.body.style.pointerEvents = "auto";
+            document.body.style.touchAction = "auto";
+            // Focus window and canvas
+            if (window.focus) window.focus();
+            const canvas = findGameCanvas();
+            if (canvas) {
+              if (typeof canvas.focus === "function") {
+                try {
+                  canvas.focus();
+                } catch (e) {}
+              }
+              // dispatch pointer and mouse fallback events
+              try {
+                const pUp = new PointerEvent("pointerup", {
+                  bubbles: true,
+                  cancelable: true,
+                });
+                canvas.dispatchEvent(pUp);
+                const pCancel = new PointerEvent("pointercancel", {
+                  bubbles: true,
+                  cancelable: true,
+                });
+                canvas.dispatchEvent(pCancel);
+              } catch (e) {
+                try {
+                  const mu = new MouseEvent("mouseup", {
+                    bubbles: true,
+                    cancelable: true,
+                  });
+                  canvas.dispatchEvent(mu);
+                } catch (ee) {}
+              }
+            }
+          } catch (e) {
+            console.warn("wakeParentInput failed", e);
+          }
+        }
+
+        // open: create iframe, attach, show overlay and enable pointer-events
+        window.openPipePuzzle = function (url) {
+          try {
+            // If already open, ignore
+            if (iframe) return;
+            iframe = document.createElement("iframe");
+            iframe.className = "pipepuzzle_iframe";
+            iframe.id = "pipepuzzle_iframe";
+            iframe.src = url || PIPE_URL;
+            iframe.title = "PipePuzzle";
+            iframe.setAttribute(
+              "allow",
+              "fullscreen; autoplay; clipboard-read; clipboard-write"
+            );
+            // Prevent clicks inside iframe from closing overlay: stop propagation on wrapper click handler by checking target
+            iframeWrap.appendChild(iframe);
+
+            // show overlay and make interactive
+            iframeWrap.style.display = "flex";
+            iframeWrap.classList.add("show");
+            iframeWrap.style.pointerEvents = "auto";
+            iframeWrap.setAttribute("aria-hidden", "false");
+
+            // try focusing iframe after load for keyboard input
+            iframe.addEventListener(
+              "load",
+              () => {
+                try {
+                  iframe.contentWindow &&
+                    iframe.contentWindow.focus &&
+                    iframe.contentWindow.focus();
+                } catch (e) {}
+              },
+              { once: true }
+            );
+          } catch (e) {
+            console.error("openPipePuzzle failed", e);
+          }
         };
 
+        // close: remove iframe element, hide overlay, restore parent input and wake it
         window.closePipePuzzle = function () {
-          iframe.src = "";
-          iframeWrap.style.display = "none";
-          // Notify Construct runtime if needed
+          try {
+            if (iframe) {
+              // try best-effort to stop iframe internal activity
+              try {
+                iframe.src = "about:blank";
+              } catch (e) {}
+              // remove DOM node
+              try {
+                iframe.remove();
+              } catch (e) {
+                iframe.parentNode && iframe.parentNode.removeChild(iframe);
+              }
+              iframe = null;
+            }
+            // hide overlay and make it non-interactive
+            iframeWrap.style.display = "none";
+            iframeWrap.classList.remove("show");
+            iframeWrap.style.pointerEvents = "none";
+            iframeWrap.setAttribute("aria-hidden", "true");
+
+            // small delay to allow DOM reflow before waking input
+            setTimeout(wakeParentInput, 40);
+          } catch (e) {
+            console.warn("closePipePuzzle error", e);
+          }
         };
 
-        // Trusted origins - for now accept any origin from iframe for easier local testing.
-        // In production, set exact parentOrigin in the PipePuzzlee postMessage call and validate here.
+        // Close when clicking outside iframe (overlay background). If click target is the wrapper (not the iframe), close.
+        iframeWrap.addEventListener("click", function (ev) {
+          // if click/touch was directly on wrapper (not inside iframe), close
+          if (ev.target === iframeWrap) {
+            // allow a short delay to avoid accidental taps closing immediately
+            window.closePipePuzzle && window.closePipePuzzle();
+          }
+        });
+
+        // Also handle escape key to close overlay
+        window.addEventListener("keydown", function (ev) {
+          if (ev.key === "Escape" && iframe) {
+            window.closePipePuzzle && window.closePipePuzzle();
+          }
+        });
+
+        // PostMessage listener from PipePuzzle iframe
         window.addEventListener(
           "message",
           function (event) {
-            // For security, you can check event.origin here.
             try {
               const data = event.data;
               if (!data || !data.type) return;
               if (data.type === "levelComplete") {
-                // Close iframe
                 window.closePipePuzzle();
                 console.log(
                   "Parent received levelComplete from PipePuzzle",
                   data
                 );
-                // If Construct runtime is available, call a function named FromIframe with JSON string param
                 try {
                   if (
                     window.runtime &&
@@ -140,11 +273,10 @@
                       JSON.stringify(data)
                     );
                   } else if (typeof window.CallFunction === "function") {
-                    // Older Construct versions may expose CallFunction
                     window.CallFunction("FromIframe", JSON.stringify(data));
                   } else {
                     console.warn(
-                      'Construct runtime.callFunction not found. You need to add a Function event "FromIframe" or adjust integration.'
+                      'Construct runtime.callFunction not found. Add a Function event "FromIframe" or adjust integration.'
                     );
                   }
                 } catch (e) {
@@ -158,9 +290,9 @@
           false
         );
 
-        // Debug helper in case you cannot trigger from Construct: expose button
+        // Debug helper
         console.log(
-          "PipePuzzle integration loaded. Call window.openPipePuzzle() to open the embedded level."
+          "PipePuzzle integration ready. Call window.openPipePuzzle() to open the embedded level."
         );
       })();
     </script>
