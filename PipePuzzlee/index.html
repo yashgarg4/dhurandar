@@ -261,8 +261,8 @@
 
                   // Check for win condition
                   if (checkWinCondition()) {
-                    // Show popup
-                    showWinPopup();
+                    // Mission complete, notify parent immediately
+                    sendLevelCompleteToParent(0);
                   }
                 }
               }
@@ -302,31 +302,20 @@
         return Object.values(gameState.locked).every((isLocked) => isLocked);
       }
 
-      function showWinPopup() {
-        const popup = document.getElementById("winPopup");
-        popup.style.display = "flex";
-        popup.addEventListener("click", () => {
-          // Notify parent and hide popup
-          try { sendLevelCompleteToParent(0); } catch(e){ console.warn(e); }
-          popup.style.display = "none";
-        });
+      // --- Integration: notify parent Construct when puzzle completes ---
+      function sendLevelCompleteToParent(score = 0) {
+        const payload = { type: "levelComplete", level: 2, score: score };
+        try {
+          // Use '*' for parentOrigin if unknown; replace in production with exact origin
+          const parentOrigin = "*";
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(payload, parentOrigin);
+            console.log("PipePuzzle: posted levelComplete to parent", payload);
+          }
+        } catch (e) {
+          console.warn("PipePuzzle: postMessage failed", e);
+        }
       }
-
-
-// --- Integration: notify parent Construct when puzzle completes ---
-function sendLevelCompleteToParent(score = 0) {
-  const payload = { type: "levelComplete", level: 2, score: score };
-  try {
-    // Use '*' for parentOrigin if unknown; replace in production with exact origin
-    const parentOrigin = "*";
-    if (window.parent && window.parent !== window) {
-      window.parent.postMessage(payload, parentOrigin);
-      console.log("PipePuzzle: posted levelComplete to parent", payload);
-    }
-  } catch (e) {
-    console.warn("PipePuzzle: postMessage failed", e);
-  }
-}
       // --- Asset Management ---
       function onAssetLoaded() {
         resourcesLoaded++;
@@ -345,7 +334,7 @@ function sendLevelCompleteToParent(score = 0) {
         };
       };
 
-      load(assets.hud, "HUD Ref.png");
+      load(assets.hud, "newHUD.png");
       load(assets.gridBg, "Circuit.png");
       load(assets.redNode, "Red Node100.png");
       load(assets.yellowNode, "YellowNode100.png");
