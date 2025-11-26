@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Pipe Art Game - Phase 7 (Clear on Node Click)</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #111;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+        touch-action: none;
+      }
+
+      canvas {
+        background-color: #000000;
+        box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        max-width: 100%;
+        max-height: 100%;
+      }
+
+      .popup {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.7);
+        display: none; /* Hidden by default */
+        justify-content: center;
+        align-items: center;
+        z-index: 100;
+        font-family: sans-serif;
+      }
+
+      .popup-content {
+        background-color: #fff;
+        padding: 20px 40px;
+        border-radius: 10px;
+        text-align: center;
+        color: #333;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="gameCanvas" width="640" height="1152"></canvas>
+    <div id="winPopup" class="popup">
+      <div class="popup-content">
+        <h2>Mission Done</h2>
+      </div>
+    </div>
+    <script>
+      // --- Configuration ---
+      const CANVAS_WIDTH = 640;
+      const CANVAS_HEIGHT = 1152;
+      const BG_COLOR = "#000000";
+      const GRID_ROWS = 5;
+      const GRID_COLS = 5;
+
+      // --- Assets ---
+      const assets = {
+        hud: new Image(),
+        gridBg: new Image(),
+        // Nodes
+        redNode: new Image(),
+        yellowNode: new Image(),
+        blueNode: new Image(),
+        greenNode: new Image(),
+        // Red Pipes
+        redStraight: new Image(),
+        redBend: new Image(),
+        redCap: new Image(),
+        // Blue Pipes
+        blueStraight: new Image(),
+        blueBend: new Image(),
+        blueCap: new Image(),
+        // Green Pipes
+        greenStraight: new Image(),
+        greenBend: new Image(),
+        greenCap: new Image(),
+        // Yellow Pipes
+        yellowStraight: new Image(),
+        yellowBend: new Image(),
+        yellowCap: new Image(),
+      };
+
+      // Asset loading state
+      let resourcesLoaded = 0;
+      const totalResources = 18;
+
+      // --- Game State ---
+      let gameState = {
+        gridY: 0,
+        cellSize: 0,
+        gridHeight: 0,
+
+        // Gameplay
+        isDragging: false,
+        activeColor: null,
+        paths: {
+          red: [],
+          yellow: [],
+          blue: [],
+          green: [],
+        },
+        // Locks: when reaching the target node, stop further drawing for that color
+        locked: {
+          red: false,
+          yellow: false,
+          blue: false,
+          green: false,
+        },
+      };
+
+      // Level Data
+      const levelNodes = [
+        { row: 0, col: 2, color: "red", img: "redNode" },
+        { row: 3, col: 1, color: "red", img: "redNode" },
+        { row: 0, col: 0, color: "yellow", img: "yellowNode" },
+        { row: 1, col: 2, color: "yellow", img: "yellowNode" },
+        { row: 0, col: 4, color: "green", img: "greenNode" },
+        { row: 4, col: 3, color: "green", img: "greenNode" },
+        { row: 1, col: 0, color: "blue", img: "blueNode" },
+        { row: 3, col: 3, color: "blue", img: "blueNode" },
+      ];
+
+      // --- Setup ---
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+
+      // --- Input Event Listeners ---
+      canvas.addEventListener("mousedown", handleStart);
+      canvas.addEventListener("mousemove", handleMove);
+      canvas.addEventListener("mouseup", handleEnd);
+      canvas.addEventListener("touchstart", (e) => handleStart(e.touches[0]));
+      canvas.addEventListener("touchmove", (e) => handleMove(e.touches[0]));
+      canvas.addEventListener("touchend", handleEnd);
+
+      function getGridPos(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = CANVAS_WIDTH / rect.width;
+        const scaleY = CANVAS_HEIGHT / rect.height;
+
+        const x = (clientX - rect.left) * scaleX;
+        const y = (clientY - rect.top) * scaleY;
+
+        if (y < gameState.gridY || y > gameState.gridY + gameState.gridHeight)
+          return null;
+
+        const col = Math.floor(x / gameState.cellSize);
+        const row = Math.floor((y - gameState.gridY) / gameState.cellSize);
+
+        // FIXED: proper row/col bounds check
+        if (col >= 0 && col < GRID_COLS && row >= 0 && row < GRID_ROWS) {
+          return { row, col };
+        }
+        return null;
+      }
+
+      function handleStart(e) {
+        e.preventDefault && e.preventDefault();
+        const pos = getGridPos(e.clientX, e.clientY);
+        if (!pos) return;
+
+        const node = levelNodes.find(
+          (n) => n.row === pos.row && n.col === pos.col
+        );
+
+        if (node) {
+          // If this color already locked (completed), clicking the node clears it (unlock)
+          if (gameState.locked[node.color]) {
+            gameState.paths[node.color] = [];
+            gameState.locked[node.color] = false;
+            // stop any drag (user clicked to clear)
+            gameState.isDragging = false;
+            gameState.activeColor = null;
+            return;
+          }
+
+          // If not locked, start drawing from this node
+          gameState.isDragging = true;
+          gameState.activeColor = node.color;
+          // When starting, reset path to just the start node
+          gameState.paths[node.color] = [pos];
+        }
+      }
+
+      function handleMove(e) {
+        if (!gameState.isDragging || !gameState.activeColor) return;
+        e.preventDefault && e.preventDefault();
+
+        const color = gameState.activeColor;
+        // If this color is locked, ignore any further moves
+        if (gameState.locked[color]) {
+          // Safety: stop dragging if locked mid-drag
+          gameState.isDragging = false;
+          gameState.activeColor = null;
+          return;
+        }
+
+        const pos = getGridPos(e.clientX, e.clientY);
+        if (!pos) return;
+
+        const path = gameState.paths[color];
+        const lastPos = path[path.length - 1];
+
+        if (pos.row !== lastPos.row || pos.col !== lastPos.col) {
+          const isAdjacent =
+            Math.abs(pos.row - lastPos.row) +
+              Math.abs(pos.col - lastPos.col) ===
+            1;
+
+          if (isAdjacent) {
+            // Backtracking
+            if (path.length > 1) {
+              const prevPos = path[path.length - 2];
+              if (pos.row === prevPos.row && pos.col === prevPos.col) {
+                path.pop();
+                return;
+              }
+            }
+
+            // Collision
+            if (isCellOccupied(pos.row, pos.col, color)) return;
+
+            // Add to path
+            const alreadyInPath = path.some(
+              (p) => p.row === pos.row && p.col === pos.col
+            );
+            if (!alreadyInPath) {
+              path.push(pos);
+
+              // After pushing, check whether we've reached the target node of the same color
+              // Target node = any node of same color that is NOT the starting node
+              const sameColorNodes = levelNodes.filter(
+                (n) => n.color === color
+              );
+              if (sameColorNodes.length >= 2) {
+                const startNode = path[0];
+                const reachedOtherNode = sameColorNodes.some(
+                  (n) =>
+                    !(n.row === startNode.row && n.col === startNode.col) &&
+                    n.row === pos.row &&
+                    n.col === pos.col
+                );
+                if (reachedOtherNode) {
+                  // lock this color: no more drawing or changes allowed
+                  gameState.locked[color] = true;
+                  // end dragging immediately
+                  gameState.isDragging = false;
+                  gameState.activeColor = null;
+
+                  // Check for win condition
+                  if (checkWinCondition()) {
+                    // Show popup
+                    showWinPopup();
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      function isCellOccupied(r, c, myColor) {
+        // Check Nodes (cannot run over other color nodes)
+        const node = levelNodes.find((n) => n.row === r && n.col === c);
+        if (node && node.color !== myColor) {
+          // Allow stepping onto the target node of the current color
+          const isTargetNode = levelNodes
+            .filter((n) => n.color === myColor)
+            .some((n) => n.row === r && n.col === c);
+          if (!isTargetNode) {
+            return true;
+          }
+        }
+
+        // Check Paths (cannot run over other color paths)
+        for (const key in gameState.paths) {
+          if (key === myColor) continue;
+          const otherPath = gameState.paths[key];
+          if (otherPath.some((p) => p.row === r && p.col === c)) return true;
+        }
+        return false;
+      }
+
+      function handleEnd(e) {
+        gameState.isDragging = false;
+        gameState.activeColor = null;
+      }
+
+      function checkWinCondition() {
+        return Object.values(gameState.locked).every((isLocked) => isLocked);
+      }
+
+      function showWinPopup() {
+        const popup = document.getElementById("winPopup");
+        popup.style.display = "flex";
+        popup.addEventListener("click", () => {
+          // Notify parent and hide popup
+          try { sendLevelCompleteToParent(0); } catch(e){ console.warn(e); }
+          popup.style.display = "none";
+        });
+      }
+
+
+// --- Integration: notify parent Construct when puzzle completes ---
+function sendLevelCompleteToParent(score = 0) {
+  const payload = { type: "levelComplete", level: 2, score: score };
+  try {
+    // Use '*' for parentOrigin if unknown; replace in production with exact origin
+    const parentOrigin = "*";
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(payload, parentOrigin);
+      console.log("PipePuzzle: posted levelComplete to parent", payload);
+    }
+  } catch (e) {
+    console.warn("PipePuzzle: postMessage failed", e);
+  }
+}
+      // --- Asset Management ---
+      function onAssetLoaded() {
+        resourcesLoaded++;
+        if (resourcesLoaded === totalResources) {
+          calculateLayout();
+          requestAnimationFrame(gameLoop);
+        }
+      }
+
+      const load = (asset, src) => {
+        asset.src = src;
+        asset.onload = onAssetLoaded;
+        asset.onerror = () => {
+          console.warn("Failed to load: " + src);
+          onAssetLoaded();
+        };
+      };
+
+      load(assets.hud, "HUD Ref.png");
+      load(assets.gridBg, "Circuit.png");
+      load(assets.redNode, "Red Node100.png");
+      load(assets.yellowNode, "YellowNode100.png");
+      load(assets.blueNode, "Blue Node100.png");
+      load(assets.greenNode, "Green Node100.png");
+
+      load(assets.redStraight, "RedPipestate.png");
+      load(assets.redBend, "RedPipeBend.png");
+      load(assets.redCap, "RedPipestartend.png");
+
+      load(assets.blueStraight, "BluePipestate.png");
+      load(assets.blueBend, "BluePipeBend.png");
+      load(assets.blueCap, "BluePipestartend.png");
+
+      load(assets.greenStraight, "GreenPipestate.png");
+      load(assets.greenBend, "GreenPipeBend.png");
+      load(assets.greenCap, "GreenPipestartend.png");
+
+      load(assets.yellowStraight, "YellowPipestate.png");
+      load(assets.yellowBend, "YellowPipeBend.png");
+      load(assets.yellowCap, "YellowPipestartend.png");
+
+      // --- Logic ---
+      function calculateLayout() {
+        let hudHeight = 100;
+        if (assets.hud.complete && assets.hud.naturalWidth !== 0) {
+          const hudAspectRatio = assets.hud.height / assets.hud.width;
+          hudHeight = CANVAS_WIDTH * hudAspectRatio;
+        }
+        gameState.gridY = hudHeight;
+        gameState.cellSize = CANVAS_WIDTH / GRID_COLS;
+        gameState.gridHeight = gameState.cellSize * GRID_ROWS;
+      }
+
+      function resize() {
+        const scaleX = window.innerWidth / CANVAS_WIDTH;
+        const scaleY = window.innerHeight / CANVAS_HEIGHT;
+        const scale = Math.min(scaleX, scaleY);
+        canvas.style.width = `${CANVAS_WIDTH * scale}px`;
+        canvas.style.height = `${CANVAS_HEIGHT * scale}px`;
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      function gameLoop() {
+        render();
+        requestAnimationFrame(gameLoop);
+      }
+
+      function render() {
+        ctx.fillStyle = BG_COLOR;
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+        if (assets.hud.complete)
+          ctx.drawImage(assets.hud, 0, 0, CANVAS_WIDTH, gameState.gridY);
+        if (assets.gridBg.complete)
+          ctx.drawImage(
+            assets.gridBg,
+            0,
+            gameState.gridY,
+            CANVAS_WIDTH,
+            gameState.gridHeight
+          );
+        else {
+          ctx.fillStyle = "#222";
+          ctx.fillRect(0, gameState.gridY, CANVAS_WIDTH, gameState.gridHeight);
+        }
+
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = 0; i <= GRID_COLS; i++) {
+          const x = i * gameState.cellSize;
+          ctx.moveTo(x, gameState.gridY);
+          ctx.lineTo(x, gameState.gridY + gameState.gridHeight);
+        }
+        for (let i = 0; i <= GRID_ROWS; i++) {
+          const y = gameState.gridY + i * gameState.cellSize;
+          ctx.moveTo(0, y);
+          ctx.lineTo(CANVAS_WIDTH, y);
+        }
+        ctx.stroke();
+
+        // draw all pipes (base pass)
+        ["red", "yellow", "blue", "green"].forEach((color) => {
+          drawPath(gameState.paths[color], color);
+        });
+
+        // draw nodes
+        levelNodes.forEach((node) => {
+          const img = assets[node.img];
+          if (img && img.complete) {
+            const cellX = node.col * gameState.cellSize;
+            const cellY = gameState.gridY + node.row * gameState.cellSize;
+            const drawSize = 100;
+            const offset = (gameState.cellSize - drawSize) / 2;
+            ctx.drawImage(
+              img,
+              cellX + offset,
+              cellY + offset,
+              drawSize,
+              drawSize
+            );
+          }
+        });
+
+        // --- redraw start & end segments above nodes ---
+        ["red", "yellow", "blue", "green"].forEach((color) => {
+          const path = gameState.paths[color];
+          if (!path || path.length === 0) return;
+
+          // start segment (path[0] as cap oriented toward path[1])
+          const start = path[0];
+          const startNext = path.length > 1 ? path[1] : null;
+          drawPipeSegment(start, null, startNext, color);
+
+          // end segment (last cell as cap oriented toward previous)
+          if (path.length > 1) {
+            const last = path[path.length - 1];
+            const lastPrev = path[path.length - 2];
+            drawPipeSegment(last, lastPrev, null, color);
+          } else {
+            // If path length == 1 the start==end; already drew start which serves as both.
+          }
+        });
+      }
+
+      function drawPath(path, color) {
+        if (!path || path.length === 0) return;
+
+        for (let i = 0; i < path.length; i++) {
+          const curr = path[i];
+          const prev = i > 0 ? path[i - 1] : null;
+          const next = i < path.length - 1 ? path[i + 1] : null;
+          drawPipeSegment(curr, prev, next, color);
+        }
+      }
+
+      function drawPipeSegment(curr, prev, next, color) {
+        const straightImg = assets[color + "Straight"];
+        const bendImg = assets[color + "Bend"];
+        const capImg = assets[color + "Cap"];
+
+        const cx = curr.col * gameState.cellSize + gameState.cellSize / 2;
+        const cy =
+          gameState.gridY +
+          curr.row * gameState.cellSize +
+          gameState.cellSize / 2;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        // CASE 1: End of line (Cap)
+        if (!prev || !next) {
+          const neighbor = prev || next;
+          if (neighbor) {
+            const dx = neighbor.col - curr.col;
+            const dy = neighbor.row - curr.row;
+            let angle = 0;
+
+            // Cap logic (Asset Points UP, Connection is BOTTOM)
+            if (dx === 1) angle = -Math.PI / 2; // Right
+            else if (dy === 1) angle = 0; // Down
+            else if (dx === -1) angle = Math.PI / 2; // Left
+            else if (dy === -1) angle = Math.PI; // Up
+
+            ctx.rotate(angle);
+            ctx.drawImage(
+              capImg,
+              -gameState.cellSize / 2,
+              -gameState.cellSize / 2,
+              gameState.cellSize,
+              gameState.cellSize
+            );
+          }
+        }
+        // CASE 2: Middle Segment
+        else {
+          const dx1 = curr.col - prev.col;
+          const dy1 = curr.row - prev.row;
+          const dx2 = next.col - curr.col;
+          const dy2 = next.row - curr.row;
+
+          // Straight (Horizontal Asset)
+          if (dx1 === dx2 && dy1 === dy2) {
+            if (dy1 !== 0) ctx.rotate(Math.PI / 2);
+            ctx.drawImage(
+              straightImg,
+              -gameState.cellSize / 2,
+              -gameState.cellSize / 2,
+              gameState.cellSize,
+              gameState.cellSize
+            );
+          }
+          // Bend
+          else {
+            // Determine the directions we are connecting
+            const hasUp = prev.row < curr.row || next.row < curr.row;
+            const hasDown = prev.row > curr.row || next.row > curr.row;
+            const hasLeft = prev.col < curr.col || next.col < curr.col;
+            const hasRight = prev.col > curr.col || next.col > curr.col; // Corrected: Check for neighbor greater than current col
+
+            let angle = 0;
+
+            // Asset is Top-Left (Up & Left) by default (0 rotation)
+            if (hasUp && hasLeft) {
+              angle = 0;
+            }
+            // Need Left & Down -> Rotate 90 degrees clockwise
+            else if (hasLeft && hasDown) {
+              angle = -Math.PI / 2; // 90
+            }
+            // Need Down & Right -> Rotate 180 degrees
+            else if (hasDown && hasRight) {
+              angle = Math.PI; // 180
+            }
+            // Need Right & Up -> Rotate 270 degrees clockwise (or -90 counter-clockwise)
+            else if (hasRight && hasUp) {
+              angle = Math.PI / 2; // 270 (-90)
+            }
+
+            ctx.rotate(angle);
+            ctx.drawImage(
+              bendImg,
+              -gameState.cellSize / 2,
+              -gameState.cellSize / 2,
+              gameState.cellSize,
+              gameState.cellSize
+            );
+          }
+        }
+
+        ctx.restore();
+      }
+    </script>
+  </body>
+</html>
