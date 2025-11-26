@@ -15,6 +15,15 @@
     <link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png" />
     <link rel="icon" type="image/png" href="icons/icon-512.png" />
     <link rel="stylesheet" href="style.css" />
+    <style>
+      /* minimal safety defaults so mobile browsers behave more predictably */
+      html, body {
+        -webkit-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+        touch-action: manipulation;
+      }
+    </style>
   </head>
 
   <body>
@@ -79,7 +88,7 @@
         top: 12px;
         right: 12px;
         z-index: 100000;
-        background: rgba(0, 0, 0, 0.5);
+        background: rgba(0,0,0,0.5);
         color: #fff;
         padding: 6px 10px;
         border-radius: 6px;
@@ -88,19 +97,12 @@
         -webkit-user-select: none;
         display: none;
       }
-      #pipepuzzle_iframe_wrap.show #pipepuzzle_close_hint {
-        display: block;
-      }
+      #pipepuzzle_iframe_wrap.show #pipepuzzle_close_hint { display: block; }
     </style>
 
-    <div
-      id="pipepuzzle_iframe_wrap"
-      aria-hidden="true"
-      role="dialog"
-      tabindex="-1"
-    >
+    <div id="pipepuzzle_iframe_wrap" aria-hidden="true" role="dialog" tabindex="-1">
       <!-- <div id="pipepuzzle_close_hint">Tap outside to close</div> -->
-      <!-- iframe will be inserted dynamically -->
+      <!-- iframe inserted dynamically -->
     </div>
 
     <script>
@@ -110,7 +112,12 @@
         const PIPE_URL = "./PipePuzzlee/index.html";
         let iframe = null;
 
-        // prefer common Construct canvas ids, else first canvas
+        // Detect Android Chrome user agent (best-effort)
+        const ua = navigator.userAgent || navigator.vendor || "";
+        const isAndroid = /Android/i.test(ua);
+        const isChrome = /Chrome\/\d+/i.test(ua) || /CriOS\/\d+/i.test(ua); // include iOS Chrome if any
+        const useAndroidAggressive = isAndroid && isChrome;
+
         function findGameCanvas() {
           return (
             document.getElementById("c2canvas") ||
@@ -119,103 +126,110 @@
           );
         }
 
-        // attempt to "wake" touch/pointer handling on Android Chrome
-        function wakeParentInput(retryCount = 2) {
+        function clearSelectionAndBlur() {
+          try {
+            if (window.getSelection) {
+              const sel = window.getSelection();
+              if (sel && sel.removeAllRanges) sel.removeAllRanges();
+            }
+            if (document.activeElement && typeof document.activeElement.blur === "function") {
+              document.activeElement.blur();
+            }
+          } catch (e) {}
+        }
+
+        function safeDispatchEvent(target, ev) {
+          if (!target) return;
+          try {
+            target.dispatchEvent(ev);
+          } catch (e) {}
+        }
+
+        // Compose and dispatch a set of synthetic events to help Android Chrome release capture
+        function dispatchRecoveryEventsTo(target) {
+          if (!target) return;
+          // pointer events
+          try {
+            const pDown = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
+            const pUp = new PointerEvent("pointerup", { bubbles: true, cancelable: true });
+            const pCancel = new PointerEvent("pointercancel", { bubbles: true, cancelable: true });
+            safeDispatchEvent(target, pDown);
+            safeDispatchEvent(target, pUp);
+            safeDispatchEvent(target, pCancel);
+          } catch (e) {
+            // fallback mouse events
+            try {
+              const mu = new MouseEvent("mouseup", { bubbles: true, cancelable: true });
+              safeDispatchEvent(target, mu);
+            } catch (ee) {}
+          }
+
+          // send a click event
+          try {
+            const clickEv = new MouseEvent("click", { bubbles: true, cancelable: true });
+            safeDispatchEvent(target, clickEv);
+          } catch (e) {}
+
+          // send a lightweight keyup for good measure
+          try {
+            const ku = new KeyboardEvent("keyup", { bubbles: true, cancelable: true });
+            safeDispatchEvent(target, ku);
+          } catch (e) {}
+        }
+
+        // Wake routine: repeated attempts to restore input handlers
+        function wakeParentInput(attemptsRemaining) {
           try {
             // restore page pointer behavior
             document.body.style.pointerEvents = "auto";
             document.body.style.touchAction = "auto";
 
-            // blur any focused element (e.g., input inside iframe previously)
-            try {
-              document.activeElement &&
-                document.activeElement.blur &&
-                document.activeElement.blur();
-            } catch (e) {}
+            clearSelectionAndBlur();
 
-            // focus window
-            try {
-              window.focus && window.focus();
-            } catch (e) {}
+            try { window.focus && window.focus(); } catch (e) {}
 
             const canvas = findGameCanvas();
-            // set canvas touch-action to auto (defensive)
             if (canvas) {
-              try {
-                canvas.style.touchAction = "auto";
-              } catch (e) {}
-              try {
-                canvas.style.pointerEvents = "auto";
-              } catch (e) {}
-              try {
-                canvas.focus && canvas.focus();
-              } catch (e) {}
+              try { canvas.style.touchAction = "auto"; } catch (e) {}
+              try { canvas.style.pointerEvents = "auto"; } catch (e) {}
+              try { canvas.focus && canvas.focus(); } catch (e) {}
+              dispatchRecoveryEventsTo(canvas);
             }
 
-            // helper to dispatch pointer events safely
-            function dispatchPointerEvents(target) {
-              if (!target) return;
-              try {
-                const down = new PointerEvent("pointerdown", {
-                  bubbles: true,
-                  cancelable: true,
-                });
-                const up = new PointerEvent("pointerup", {
-                  bubbles: true,
-                  cancelable: true,
-                });
-                const cancel = new PointerEvent("pointercancel", {
-                  bubbles: true,
-                  cancelable: true,
-                });
-                target.dispatchEvent(down);
-                target.dispatchEvent(up);
-                target.dispatchEvent(cancel);
-              } catch (e) {
-                // fallback to mouse events if PointerEvent not allowed
-                try {
-                  const mu = new MouseEvent("mouseup", {
-                    bubbles: true,
-                    cancelable: true,
-                  });
-                  target.dispatchEvent(mu);
-                } catch (ee) {}
-              }
-            }
-
-            // dispatch to canvas
-            if (canvas) dispatchPointerEvents(canvas);
-
-            // dispatch to center of viewport element (elementFromPoint) — helps Android Chrome release capture
+            // dispatch to center element (helps Android Chrome)
             try {
               const cx = Math.round(window.innerWidth / 2);
               const cy = Math.round(window.innerHeight / 2);
-              const el = document.elementFromPoint(cx, cy);
-              if (el && el !== iframeWrap) dispatchPointerEvents(el);
+              const centerEl = document.elementFromPoint(cx, cy);
+              if (centerEl) {
+                dispatchRecoveryEventsTo(centerEl);
+              }
             } catch (e) {}
 
-            // small retry: run again after 80ms to increase reliability
-            if (retryCount > 0) {
-              setTimeout(() => wakeParentInput(retryCount - 1), 80);
+            // Also dispatch to body as a last fallback
+            dispatchRecoveryEventsTo(document.body);
+
+            // If Android Chrome, repeat more times and slightly longer delay
+            if (attemptsRemaining > 0) {
+              const delay = useAndroidAggressive ? 120 : 60;
+              setTimeout(() => wakeParentInput(attemptsRemaining - 1), delay);
             }
           } catch (e) {
             console.warn("wakeParentInput failed", e);
           }
         }
 
-        // open iframe
+        // Public open
         window.openPipePuzzle = function (url) {
           try {
-            if (iframe) return; // already open
+            if (iframe) return;
             iframe = document.createElement("iframe");
             iframe.className = "pipepuzzle_iframe";
             iframe.id = "pipepuzzle_iframe";
             iframe.src = url || PIPE_URL;
             iframe.title = "PipePuzzle";
-            iframe.setAttribute(
-              "allow",
-              "fullscreen; autoplay; clipboard-read; clipboard-write"
-            );
+            iframe.setAttribute("allow", "fullscreen; autoplay; clipboard-read; clipboard-write");
+            iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-popups"); // adjust as needed
             iframeWrap.appendChild(iframe);
 
             // show overlay and make it interactive
@@ -225,34 +239,20 @@
             iframeWrap.setAttribute("aria-hidden", "false");
 
             // focus iframe after load
-            iframe.addEventListener(
-              "load",
-              () => {
-                try {
-                  iframe.contentWindow &&
-                    iframe.contentWindow.focus &&
-                    iframe.contentWindow.focus();
-                } catch (e) {}
-              },
-              { once: true }
-            );
+            iframe.addEventListener("load", () => {
+              try { iframe.contentWindow && iframe.contentWindow.focus && iframe.contentWindow.focus(); } catch (e) {}
+            }, { once: true });
           } catch (e) {
             console.error("openPipePuzzle failed", e);
           }
         };
 
-        // close iframe: remove and wake parent
+        // Public close
         window.closePipePuzzle = function () {
           try {
             if (iframe) {
-              try {
-                iframe.src = "about:blank";
-              } catch (e) {}
-              try {
-                iframe.remove();
-              } catch (e) {
-                iframe.parentNode && iframe.parentNode.removeChild(iframe);
-              }
+              try { iframe.src = "about:blank"; } catch (e) {}
+              try { iframe.remove(); } catch (e) { iframe.parentNode && iframe.parentNode.removeChild(iframe); }
               iframe = null;
             }
 
@@ -262,70 +262,55 @@
             iframeWrap.style.pointerEvents = "none";
             iframeWrap.setAttribute("aria-hidden", "true");
 
-            // small delay then aggressively wake parent input (Android Chrome often needs this)
-            setTimeout(() => wakeParentInput(2), 40);
+            // run aggressive wake sequence
+            const attempts = useAndroidAggressive ? 4 : 2; // more tries for Android Chrome
+            // small initial delay to allow reflow, then run wake attempts
+            setTimeout(() => wakeParentInput(attempts), 40);
           } catch (e) {
             console.warn("closePipePuzzle error", e);
           }
         };
 
-        // close when clicking outside iframe
+        // Close when clicking outside iframe (wrapper) — only if user taps background
         iframeWrap.addEventListener("click", function (ev) {
           if (ev.target === iframeWrap) {
             window.closePipePuzzle && window.closePipePuzzle();
           }
         });
 
-        // allow Escape to close
+        // Escape key support
         window.addEventListener("keydown", function (ev) {
           if (ev.key === "Escape" && iframe) {
             window.closePipePuzzle && window.closePipePuzzle();
           }
         });
 
-        // handle messages from iframe
-        window.addEventListener(
-          "message",
-          function (event) {
-            try {
-              const data = event.data;
-              if (!data || !data.type) return;
-              if (data.type === "levelComplete") {
-                window.closePipePuzzle();
-                console.log(
-                  "Parent received levelComplete from PipePuzzle",
-                  data
-                );
-                try {
-                  if (
-                    window.runtime &&
-                    typeof window.runtime.callFunction === "function"
-                  ) {
-                    window.runtime.callFunction(
-                      "FromIframe",
-                      JSON.stringify(data)
-                    );
-                  } else if (typeof window.CallFunction === "function") {
-                    window.CallFunction("FromIframe", JSON.stringify(data));
-                  } else {
-                    console.warn(
-                      'Construct runtime.callFunction not found. Add a Function event "FromIframe" or adjust integration.'
-                    );
-                  }
-                } catch (e) {
-                  console.warn("Error calling Construct function:", e);
+        // PostMessage handler
+        window.addEventListener("message", function (event) {
+          try {
+            const data = event.data;
+            if (!data || !data.type) return;
+            if (data.type === "levelComplete") {
+              window.closePipePuzzle();
+              console.log("Parent received levelComplete from PipePuzzle", data);
+              try {
+                if (window.runtime && typeof window.runtime.callFunction === "function") {
+                  window.runtime.callFunction("FromIframe", JSON.stringify(data));
+                } else if (typeof window.CallFunction === "function") {
+                  window.CallFunction("FromIframe", JSON.stringify(data));
+                } else {
+                  console.warn('Construct runtime.callFunction not found. Add a Function event "FromIframe" or adjust integration.');
                 }
+              } catch (e) {
+                console.warn("Error calling Construct function:", e);
               }
-            } catch (e) {
-              console.warn(e);
             }
-          },
-          false
-        );
+          } catch (e) {
+            console.warn(e);
+          }
+        }, false);
 
-        console.log(
-          "PipePuzzle integration ready. Call window.openPipePuzzle() to open the embedded level."
-        );
+        console.log("PipePuzzle integration ready. Call window.openPipePuzzle() to open the embedded level.");
       })();
     </script>
   </body>
