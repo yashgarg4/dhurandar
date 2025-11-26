@@ -36,7 +36,7 @@
         justify-content: center;
         background: rgba(0, 0, 0, 0.6);
         z-index: 99999;
-        pointer-events: none; /* non-interactive when hidden */
+        pointer-events: none;
         -webkit-tap-highlight-color: transparent;
       }
       .pipepuzzle_iframe {
@@ -72,7 +72,7 @@
         display: block;
       }
 
-      /* Android resume overlay: full-screen, visually minimal and clickable/touchable */
+      /* Android resume overlay: captures a real touch/hold */
       #touch_resume_overlay {
         position: fixed;
         left: 0;
@@ -80,20 +80,28 @@
         right: 0;
         bottom: 0;
         z-index: 100001;
-        display: none; /* shown only on Android when needed */
+        display: none;
         align-items: center;
         justify-content: center;
-        /* visually subtle: translucent hint centered, otherwise transparent so game visible */
-        background: rgba(0, 0, 0, 0);
+        background: rgba(
+          0,
+          0,
+          0,
+          0
+        ); /* transparent overall to let user see game */
         -webkit-tap-highlight-color: transparent;
       }
-      #touch_resume_message {
+      #touch_resume_box {
+        pointer-events: none; /* message doesn't capture pointer; overlay does */
         background: rgba(0, 0, 0, 0.6);
         color: #fff;
         padding: 10px 14px;
         border-radius: 8px;
         font-size: 14px;
-        pointer-events: none; /* message itself doesn't receive pointer - overlay does */
+      }
+      /* small visible hint on Android 15 only */
+      #touch_resume_overlay.show #touch_resume_box {
+        pointer-events: none;
       }
     </style>
   </head>
@@ -129,35 +137,40 @@
       role="dialog"
       tabindex="-1"
     >
-      <!-- <div id="pipepuzzle_close_hint">Tap outside to close</div> -->
-      <!-- iframe inserted dynamically -->
+      <div id="pipepuzzle_close_hint">Tap outside to close</div>
+      <!-- iframe will be injected dynamically -->
     </div>
 
-    <!-- Android-only resume overlay (transparent, captures first real touch) -->
+    <!-- Android resume overlay -->
     <div
       id="touch_resume_overlay"
       aria-hidden="true"
       role="button"
       tabindex="0"
     >
-      <div id="touch_resume_message">Tap to resume game</div>
+      <div id="touch_resume_box">Tap &amp; hold anywhere to resume</div>
     </div>
 
     <script>
       (function () {
         const iframeWrap = document.getElementById("pipepuzzle_iframe_wrap");
-        const closeHint = document.getElementById("pipepuzzle_close_hint");
         const touchResume = document.getElementById("touch_resume_overlay");
-        const touchMessage = document.getElementById("touch_resume_message");
-
+        const touchBox = document.getElementById("touch_resume_box");
         const PIPE_URL = "./PipePuzzlee/index.html";
         let iframe = null;
 
-        // UA detection
-        const ua = navigator.userAgent || navigator.vendor || "";
-        const isAndroid = /Android/i.test(ua);
+        const ua = navigator.userAgent || "";
+        const isAndroid = /Android\/?(\d+)?/i.test(ua);
+        // parse Android major version if present
+        function androidMajorVersion() {
+          const m = ua.match(/Android\s+(\d+)(?:[.\d]*)/i);
+          if (!m) return null;
+          const v = parseInt(m[1], 10);
+          return isNaN(v) ? null : v;
+        }
+        const androidVer = androidMajorVersion();
         const isChrome = /Chrome\/\d+/i.test(ua) || /CriOS\/\d+/i.test(ua);
-        const useAndroidAggressive = isAndroid && isChrome;
+        const isAndroid15Chrome = androidVer === 15 && isChrome;
 
         function findGameCanvas() {
           return (
@@ -230,13 +243,16 @@
           } catch (e) {}
         }
 
+        // Very aggressive wake routine with repeats
         function wakeParentInput(attemptsRemaining) {
           try {
             document.body.style.pointerEvents = "auto";
             document.body.style.touchAction = "auto";
 
             clearSelectionAndBlur();
-            window.focus && window.focus();
+            try {
+              window.focus && window.focus();
+            } catch (e) {}
 
             const canvas = findGameCanvas();
             if (canvas) {
@@ -262,7 +278,7 @@
             dispatchRecoveryEventsTo(document.body);
 
             if (attemptsRemaining > 0) {
-              const delay = useAndroidAggressive ? 120 : 60;
+              const delay = isAndroid15Chrome ? 140 : 60;
               setTimeout(() => wakeParentInput(attemptsRemaining - 1), delay);
             }
           } catch (e) {
@@ -270,56 +286,134 @@
           }
         }
 
-        // Show the android resume overlay and attach one-time listeners that call wake routine
+        // show resume overlay for Android 15; overlay listens for *real* touch hold
         function showTouchResumeOverlay() {
           touchResume.style.display = "flex";
           touchResume.style.pointerEvents = "auto";
           touchResume.setAttribute("aria-hidden", "false");
+          touchResume.classList.add("show");
 
-          // one-time handler for touchstart/pointerdown/click.
-          const handler = function (ev) {
-            try {
-              ev.preventDefault && ev.preventDefault();
-              ev.stopPropagation && ev.stopPropagation();
-            } catch (e) {}
-            // hide overlay immediately
-            hideTouchResumeOverlay();
-            // Make a robust wake call (few retries) — real user touch has occurred now
-            setTimeout(() => wakeParentInput(3), 10);
-            // remove listeners
-            removeListeners();
-            return false;
-          };
-          const removeListeners = () => {
-            touchResume.removeEventListener("touchstart", handler, {
+          let holdTimer = null;
+          let pointerDownTime = 0;
+          const HOLD_THRESHOLD = 300; // ms — tuned for Android15 (adjust up to 400ms if needed)
+          let handled = false;
+
+          function cleanup() {
+            handled = true;
+            touchResume.style.display = "none";
+            touchResume.style.pointerEvents = "none";
+            touchResume.setAttribute("aria-hidden", "true");
+            touchResume.classList.remove("show");
+            touchResume.removeEventListener("touchstart", onTouchStart, {
               passive: false,
             });
-            touchResume.removeEventListener("pointerdown", handler);
-            touchResume.removeEventListener("click", handler);
-            touchResume.removeEventListener("keydown", keyHandler);
-          };
-          const keyHandler = function (ev) {
-            if (ev.key === "Enter" || ev.key === " ") handler(ev);
-          };
+            touchResume.removeEventListener("pointerdown", onPointerDown);
+            touchResume.removeEventListener("touchend", onTouchEnd);
+            touchResume.removeEventListener("pointerup", onPointerUp);
+            touchResume.removeEventListener("click", onClick, true);
+            document.removeEventListener(
+              "visibilitychange",
+              onVisibilityChange
+            );
+            if (holdTimer) {
+              clearTimeout(holdTimer);
+              holdTimer = null;
+            }
+          }
 
-          // Use non-passive touchstart so preventDefault works
-          touchResume.addEventListener("touchstart", handler, {
+          function doRecoveryByUserTouch() {
+            if (handled) return;
+            cleanup();
+            // run aggressive wake (user performed a real touch)
+            setTimeout(() => wakeParentInput(4), 8);
+          }
+
+          function onTouchStart(e) {
+            // stop propagation and prevent passive default to capture touch
+            try {
+              e.preventDefault && e.preventDefault();
+            } catch (err) {}
+            pointerDownTime = Date.now();
+            // start hold timer
+            holdTimer = setTimeout(
+              () => doRecoveryByUserTouch(),
+              HOLD_THRESHOLD
+            );
+          }
+          function onPointerDown(e) {
+            try {
+              e.preventDefault && e.preventDefault();
+            } catch (err) {}
+            pointerDownTime = Date.now();
+            holdTimer = setTimeout(
+              () => doRecoveryByUserTouch(),
+              HOLD_THRESHOLD
+            );
+          }
+          function onTouchEnd(e) {
+            try {
+              e.preventDefault && e.preventDefault();
+            } catch (err) {}
+            const dt = Date.now() - pointerDownTime;
+            if (holdTimer) {
+              clearTimeout(holdTimer);
+              holdTimer = null;
+            }
+            // treat short taps as fallback but prefer hold — short tap triggers recovery attempt too
+            if (dt < HOLD_THRESHOLD) {
+              // run recovery but still prefer hold: run with more retries
+              cleanup();
+              setTimeout(() => wakeParentInput(3), 20);
+            }
+          }
+          function onPointerUp(e) {
+            try {
+              e.preventDefault && e.preventDefault();
+            } catch (err) {}
+            const dt = Date.now() - pointerDownTime;
+            if (holdTimer) {
+              clearTimeout(holdTimer);
+              holdTimer = null;
+            }
+            if (dt < HOLD_THRESHOLD) {
+              cleanup();
+              setTimeout(() => wakeParentInput(3), 20);
+            }
+          }
+          function onClick(e) {
+            // prevent synthetic click propagation
+            try {
+              e.stopPropagation && e.stopPropagation();
+              e.preventDefault && e.preventDefault();
+            } catch (e) {}
+          }
+          function onVisibilityChange() {
+            // if app lost visibility (user switched), hide overlay
+            if (document.hidden) {
+              cleanup();
+            }
+          }
+
+          // Attach listeners. Use non-passive touchstart so preventDefault works.
+          touchResume.addEventListener("touchstart", onTouchStart, {
             passive: false,
-            capture: true,
           });
-          touchResume.addEventListener("pointerdown", handler, {
-            capture: true,
-          });
-          touchResume.addEventListener("click", handler, { capture: true });
-          touchResume.addEventListener("keydown", keyHandler);
+          touchResume.addEventListener("pointerdown", onPointerDown);
+          touchResume.addEventListener("touchend", onTouchEnd);
+          touchResume.addEventListener("pointerup", onPointerUp);
+          // capture clicks to block propagation to the game while overlay active
+          touchResume.addEventListener("click", onClick, true);
+          document.addEventListener("visibilitychange", onVisibilityChange);
         }
 
         function hideTouchResumeOverlay() {
           touchResume.style.display = "none";
           touchResume.style.pointerEvents = "none";
           touchResume.setAttribute("aria-hidden", "true");
+          touchResume.classList.remove("show");
         }
 
+        // open iframe
         window.openPipePuzzle = function (url) {
           try {
             if (iframe) return;
@@ -359,6 +453,7 @@
           }
         };
 
+        // close iframe: remove from DOM, run recovery; on Android 15 show tap&hold overlay
         window.closePipePuzzle = function () {
           try {
             if (iframe) {
@@ -378,26 +473,26 @@
             iframeWrap.style.pointerEvents = "none";
             iframeWrap.setAttribute("aria-hidden", "true");
 
-            // best-effort automated wake (synthetic), then on Android rely on a real tap
-            setTimeout(() => wakeParentInput(useAndroidAggressive ? 2 : 1), 40);
+            // automated synthetic recovery attempts first
+            setTimeout(() => wakeParentInput(isAndroid15Chrome ? 2 : 1), 40);
 
-            // If Android Chrome, show minimal "Tap to resume" overlay to guarantee a real touch occurs
-            if (useAndroidAggressive) {
-              // show overlay after a short delay so the UI transition feels natural
+            // For Android 15 Chrome show the Tap & Hold overlay to guarantee a REAL touch event.
+            if (isAndroid15Chrome) {
+              // show after a short delay so user sees the transition
               setTimeout(() => showTouchResumeOverlay(), 80);
-              // as a fallback, auto-hide the overlay after 6s (user can continue without tapping, but it's optional)
+              // fallback auto-hide after 8s (overlay optional)
               setTimeout(() => {
                 try {
                   hideTouchResumeOverlay();
                 } catch (e) {}
-              }, 6000);
+              }, 8000);
             }
           } catch (e) {
             console.warn("closePipePuzzle error", e);
           }
         };
 
-        // Click outside iframe to close
+        // Close when clicking outside iframe
         iframeWrap.addEventListener("click", function (ev) {
           if (ev.target === iframeWrap)
             window.closePipePuzzle && window.closePipePuzzle();
@@ -409,7 +504,7 @@
             window.closePipePuzzle && window.closePipePuzzle();
         });
 
-        // PostMessage handler
+        // PostMessage from iframe (keep previous behavior)
         window.addEventListener(
           "message",
           function (event) {
@@ -449,18 +544,13 @@
           false
         );
 
-        // If user manually taps resume overlay dismiss via keyboard (accessibility)
-        touchResume.addEventListener("keydown", function (ev) {
-          if (ev.key === "Enter" || ev.key === " ") {
-            ev.preventDefault();
-            ev.stopPropagation();
-            hideTouchResumeOverlay();
-            setTimeout(() => wakeParentInput(3), 10);
-          }
-        });
-
         console.log(
-          "PipePuzzle integration ready. Call window.openPipePuzzle() to open embedded level."
+          "PipePuzzle integration ready. Android ver:",
+          androidVer,
+          "isChrome:",
+          isChrome,
+          "Android15Fix:",
+          isAndroid15Chrome
         );
       })();
     </script>
