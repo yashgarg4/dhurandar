@@ -16,43 +16,15 @@
     <link rel="icon" type="image/png" href="icons/icon-512.png" />
     <link rel="stylesheet" href="style.css" />
     <style>
-      /* minimal safety defaults so mobile browsers behave more predictably */
-      html, body {
+      /* safety defaults */
+      html,
+      body {
         -webkit-user-select: none;
-        -ms-user-select: none;
         user-select: none;
         touch-action: manipulation;
       }
-    </style>
-  </head>
 
-  <body>
-    <script>
-      if (location.protocol.substr(0, 4) === "file") {
-        alert(
-          "Web exports won't work until you upload them. (When running on the file: protocol, browsers block many features from working for security reasons.)"
-        );
-      }
-    </script>
-
-    <noscript>
-      <div id="notSupportedWrap">
-        <h2 id="notSupportedTitle">This content requires JavaScript</h2>
-        <p class="notSupportedMessage">
-          JavaScript appears to be disabled. Please enable it to view this
-          content.
-        </p>
-      </div>
-    </noscript>
-
-    <script src="scripts/modernjscheck.js"></script>
-    <script src="scripts/supportcheck.js"></script>
-    <script src="scripts/offlineclient.js" type="module"></script>
-    <script src="scripts/main.js" type="module"></script>
-    <script src="scripts/register-sw.js" type="module"></script>
-
-    <!-- PipePuzzle iframe overlay (integrator) -->
-    <style>
+      /* iframe overlay */
       #pipepuzzle_iframe_wrap {
         position: fixed;
         left: 0;
@@ -88,34 +60,103 @@
         top: 12px;
         right: 12px;
         z-index: 100000;
-        background: rgba(0,0,0,0.5);
+        background: rgba(0, 0, 0, 0.5);
         color: #fff;
         padding: 6px 10px;
         border-radius: 6px;
         font-size: 14px;
         user-select: none;
-        -webkit-user-select: none;
         display: none;
       }
-      #pipepuzzle_iframe_wrap.show #pipepuzzle_close_hint { display: block; }
-    </style>
+      #pipepuzzle_iframe_wrap.show #pipepuzzle_close_hint {
+        display: block;
+      }
 
-    <div id="pipepuzzle_iframe_wrap" aria-hidden="true" role="dialog" tabindex="-1">
+      /* Android resume overlay: full-screen, visually minimal and clickable/touchable */
+      #touch_resume_overlay {
+        position: fixed;
+        left: 0;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 100001;
+        display: none; /* shown only on Android when needed */
+        align-items: center;
+        justify-content: center;
+        /* visually subtle: translucent hint centered, otherwise transparent so game visible */
+        background: rgba(0, 0, 0, 0);
+        -webkit-tap-highlight-color: transparent;
+      }
+      #touch_resume_message {
+        background: rgba(0, 0, 0, 0.6);
+        color: #fff;
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 14px;
+        pointer-events: none; /* message itself doesn't receive pointer - overlay does */
+      }
+    </style>
+  </head>
+
+  <body>
+    <script>
+      if (location.protocol.substr(0, 4) === "file") {
+        alert(
+          "Web exports won't work until you upload them. (file: protocol blocks features.)"
+        );
+      }
+    </script>
+
+    <noscript>
+      <div id="notSupportedWrap">
+        <h2 id="notSupportedTitle">This content requires JavaScript</h2>
+        <p class="notSupportedMessage">
+          JavaScript appears to be disabled. Please enable it to view this
+          content.
+        </p>
+      </div>
+    </noscript>
+
+    <script src="scripts/modernjscheck.js"></script>
+    <script src="scripts/supportcheck.js"></script>
+    <script src="scripts/offlineclient.js" type="module"></script>
+    <script src="scripts/main.js" type="module"></script>
+    <script src="scripts/register-sw.js" type="module"></script>
+
+    <div
+      id="pipepuzzle_iframe_wrap"
+      aria-hidden="true"
+      role="dialog"
+      tabindex="-1"
+    >
       <!-- <div id="pipepuzzle_close_hint">Tap outside to close</div> -->
       <!-- iframe inserted dynamically -->
+    </div>
+
+    <!-- Android-only resume overlay (transparent, captures first real touch) -->
+    <div
+      id="touch_resume_overlay"
+      aria-hidden="true"
+      role="button"
+      tabindex="0"
+    >
+      <div id="touch_resume_message">Tap to resume game</div>
     </div>
 
     <script>
       (function () {
         const iframeWrap = document.getElementById("pipepuzzle_iframe_wrap");
         const closeHint = document.getElementById("pipepuzzle_close_hint");
+        const touchResume = document.getElementById("touch_resume_overlay");
+        const touchMessage = document.getElementById("touch_resume_message");
+
         const PIPE_URL = "./PipePuzzlee/index.html";
         let iframe = null;
 
-        // Detect Android Chrome user agent (best-effort)
+        // UA detection
         const ua = navigator.userAgent || navigator.vendor || "";
         const isAndroid = /Android/i.test(ua);
-        const isChrome = /Chrome\/\d+/i.test(ua) || /CriOS\/\d+/i.test(ua); // include iOS Chrome if any
+        const isChrome = /Chrome\/\d+/i.test(ua) || /CriOS\/\d+/i.test(ua);
         const useAndroidAggressive = isAndroid && isChrome;
 
         function findGameCanvas() {
@@ -129,10 +170,13 @@
         function clearSelectionAndBlur() {
           try {
             if (window.getSelection) {
-              const sel = window.getSelection();
-              if (sel && sel.removeAllRanges) sel.removeAllRanges();
+              const s = window.getSelection();
+              if (s && s.removeAllRanges) s.removeAllRanges();
             }
-            if (document.activeElement && typeof document.activeElement.blur === "function") {
+            if (
+              document.activeElement &&
+              typeof document.activeElement.blur === "function"
+            ) {
               document.activeElement.blur();
             }
           } catch (e) {}
@@ -145,71 +189,78 @@
           } catch (e) {}
         }
 
-        // Compose and dispatch a set of synthetic events to help Android Chrome release capture
         function dispatchRecoveryEventsTo(target) {
           if (!target) return;
-          // pointer events
           try {
-            const pDown = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
-            const pUp = new PointerEvent("pointerup", { bubbles: true, cancelable: true });
-            const pCancel = new PointerEvent("pointercancel", { bubbles: true, cancelable: true });
+            const pDown = new PointerEvent("pointerdown", {
+              bubbles: true,
+              cancelable: true,
+            });
+            const pUp = new PointerEvent("pointerup", {
+              bubbles: true,
+              cancelable: true,
+            });
+            const pCancel = new PointerEvent("pointercancel", {
+              bubbles: true,
+              cancelable: true,
+            });
             safeDispatchEvent(target, pDown);
             safeDispatchEvent(target, pUp);
             safeDispatchEvent(target, pCancel);
           } catch (e) {
-            // fallback mouse events
             try {
-              const mu = new MouseEvent("mouseup", { bubbles: true, cancelable: true });
-              safeDispatchEvent(target, mu);
+              safeDispatchEvent(
+                target,
+                new MouseEvent("mouseup", { bubbles: true, cancelable: true })
+              );
             } catch (ee) {}
           }
 
-          // send a click event
           try {
-            const clickEv = new MouseEvent("click", { bubbles: true, cancelable: true });
-            safeDispatchEvent(target, clickEv);
+            safeDispatchEvent(
+              target,
+              new MouseEvent("click", { bubbles: true, cancelable: true })
+            );
           } catch (e) {}
-
-          // send a lightweight keyup for good measure
           try {
-            const ku = new KeyboardEvent("keyup", { bubbles: true, cancelable: true });
-            safeDispatchEvent(target, ku);
+            safeDispatchEvent(
+              target,
+              new KeyboardEvent("keyup", { bubbles: true, cancelable: true })
+            );
           } catch (e) {}
         }
 
-        // Wake routine: repeated attempts to restore input handlers
         function wakeParentInput(attemptsRemaining) {
           try {
-            // restore page pointer behavior
             document.body.style.pointerEvents = "auto";
             document.body.style.touchAction = "auto";
 
             clearSelectionAndBlur();
-
-            try { window.focus && window.focus(); } catch (e) {}
+            window.focus && window.focus();
 
             const canvas = findGameCanvas();
             if (canvas) {
-              try { canvas.style.touchAction = "auto"; } catch (e) {}
-              try { canvas.style.pointerEvents = "auto"; } catch (e) {}
-              try { canvas.focus && canvas.focus(); } catch (e) {}
+              try {
+                canvas.style.touchAction = "auto";
+              } catch (e) {}
+              try {
+                canvas.style.pointerEvents = "auto";
+              } catch (e) {}
+              try {
+                canvas.focus && canvas.focus();
+              } catch (e) {}
               dispatchRecoveryEventsTo(canvas);
             }
 
-            // dispatch to center element (helps Android Chrome)
             try {
               const cx = Math.round(window.innerWidth / 2);
               const cy = Math.round(window.innerHeight / 2);
-              const centerEl = document.elementFromPoint(cx, cy);
-              if (centerEl) {
-                dispatchRecoveryEventsTo(centerEl);
-              }
+              const el = document.elementFromPoint(cx, cy);
+              if (el) dispatchRecoveryEventsTo(el);
             } catch (e) {}
 
-            // Also dispatch to body as a last fallback
             dispatchRecoveryEventsTo(document.body);
 
-            // If Android Chrome, repeat more times and slightly longer delay
             if (attemptsRemaining > 0) {
               const delay = useAndroidAggressive ? 120 : 60;
               setTimeout(() => wakeParentInput(attemptsRemaining - 1), delay);
@@ -219,7 +270,56 @@
           }
         }
 
-        // Public open
+        // Show the android resume overlay and attach one-time listeners that call wake routine
+        function showTouchResumeOverlay() {
+          touchResume.style.display = "flex";
+          touchResume.style.pointerEvents = "auto";
+          touchResume.setAttribute("aria-hidden", "false");
+
+          // one-time handler for touchstart/pointerdown/click.
+          const handler = function (ev) {
+            try {
+              ev.preventDefault && ev.preventDefault();
+              ev.stopPropagation && ev.stopPropagation();
+            } catch (e) {}
+            // hide overlay immediately
+            hideTouchResumeOverlay();
+            // Make a robust wake call (few retries) — real user touch has occurred now
+            setTimeout(() => wakeParentInput(3), 10);
+            // remove listeners
+            removeListeners();
+            return false;
+          };
+          const removeListeners = () => {
+            touchResume.removeEventListener("touchstart", handler, {
+              passive: false,
+            });
+            touchResume.removeEventListener("pointerdown", handler);
+            touchResume.removeEventListener("click", handler);
+            touchResume.removeEventListener("keydown", keyHandler);
+          };
+          const keyHandler = function (ev) {
+            if (ev.key === "Enter" || ev.key === " ") handler(ev);
+          };
+
+          // Use non-passive touchstart so preventDefault works
+          touchResume.addEventListener("touchstart", handler, {
+            passive: false,
+            capture: true,
+          });
+          touchResume.addEventListener("pointerdown", handler, {
+            capture: true,
+          });
+          touchResume.addEventListener("click", handler, { capture: true });
+          touchResume.addEventListener("keydown", keyHandler);
+        }
+
+        function hideTouchResumeOverlay() {
+          touchResume.style.display = "none";
+          touchResume.style.pointerEvents = "none";
+          touchResume.setAttribute("aria-hidden", "true");
+        }
+
         window.openPipePuzzle = function (url) {
           try {
             if (iframe) return;
@@ -228,89 +328,140 @@
             iframe.id = "pipepuzzle_iframe";
             iframe.src = url || PIPE_URL;
             iframe.title = "PipePuzzle";
-            iframe.setAttribute("allow", "fullscreen; autoplay; clipboard-read; clipboard-write");
-            iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-popups"); // adjust as needed
+            iframe.setAttribute(
+              "allow",
+              "fullscreen; autoplay; clipboard-read; clipboard-write"
+            );
+            iframe.setAttribute(
+              "sandbox",
+              "allow-scripts allow-same-origin allow-forms allow-popups"
+            );
             iframeWrap.appendChild(iframe);
 
-            // show overlay and make it interactive
             iframeWrap.style.display = "flex";
             iframeWrap.classList.add("show");
             iframeWrap.style.pointerEvents = "auto";
             iframeWrap.setAttribute("aria-hidden", "false");
 
-            // focus iframe after load
-            iframe.addEventListener("load", () => {
-              try { iframe.contentWindow && iframe.contentWindow.focus && iframe.contentWindow.focus(); } catch (e) {}
-            }, { once: true });
+            iframe.addEventListener(
+              "load",
+              () => {
+                try {
+                  iframe.contentWindow &&
+                    iframe.contentWindow.focus &&
+                    iframe.contentWindow.focus();
+                } catch (e) {}
+              },
+              { once: true }
+            );
           } catch (e) {
             console.error("openPipePuzzle failed", e);
           }
         };
 
-        // Public close
         window.closePipePuzzle = function () {
           try {
             if (iframe) {
-              try { iframe.src = "about:blank"; } catch (e) {}
-              try { iframe.remove(); } catch (e) { iframe.parentNode && iframe.parentNode.removeChild(iframe); }
+              try {
+                iframe.src = "about:blank";
+              } catch (e) {}
+              try {
+                iframe.remove();
+              } catch (e) {
+                iframe.parentNode && iframe.parentNode.removeChild(iframe);
+              }
               iframe = null;
             }
 
-            // hide overlay and make it non-interactive
             iframeWrap.style.display = "none";
             iframeWrap.classList.remove("show");
             iframeWrap.style.pointerEvents = "none";
             iframeWrap.setAttribute("aria-hidden", "true");
 
-            // run aggressive wake sequence
-            const attempts = useAndroidAggressive ? 4 : 2; // more tries for Android Chrome
-            // small initial delay to allow reflow, then run wake attempts
-            setTimeout(() => wakeParentInput(attempts), 40);
+            // best-effort automated wake (synthetic), then on Android rely on a real tap
+            setTimeout(() => wakeParentInput(useAndroidAggressive ? 2 : 1), 40);
+
+            // If Android Chrome, show minimal "Tap to resume" overlay to guarantee a real touch occurs
+            if (useAndroidAggressive) {
+              // show overlay after a short delay so the UI transition feels natural
+              setTimeout(() => showTouchResumeOverlay(), 80);
+              // as a fallback, auto-hide the overlay after 6s (user can continue without tapping, but it's optional)
+              setTimeout(() => {
+                try {
+                  hideTouchResumeOverlay();
+                } catch (e) {}
+              }, 6000);
+            }
           } catch (e) {
             console.warn("closePipePuzzle error", e);
           }
         };
 
-        // Close when clicking outside iframe (wrapper) — only if user taps background
+        // Click outside iframe to close
         iframeWrap.addEventListener("click", function (ev) {
-          if (ev.target === iframeWrap) {
+          if (ev.target === iframeWrap)
             window.closePipePuzzle && window.closePipePuzzle();
-          }
         });
 
         // Escape key support
         window.addEventListener("keydown", function (ev) {
-          if (ev.key === "Escape" && iframe) {
+          if (ev.key === "Escape" && iframe)
             window.closePipePuzzle && window.closePipePuzzle();
-          }
         });
 
         // PostMessage handler
-        window.addEventListener("message", function (event) {
-          try {
-            const data = event.data;
-            if (!data || !data.type) return;
-            if (data.type === "levelComplete") {
-              window.closePipePuzzle();
-              console.log("Parent received levelComplete from PipePuzzle", data);
-              try {
-                if (window.runtime && typeof window.runtime.callFunction === "function") {
-                  window.runtime.callFunction("FromIframe", JSON.stringify(data));
-                } else if (typeof window.CallFunction === "function") {
-                  window.CallFunction("FromIframe", JSON.stringify(data));
-                } else {
-                  console.warn('Construct runtime.callFunction not found. Add a Function event "FromIframe" or adjust integration.');
+        window.addEventListener(
+          "message",
+          function (event) {
+            try {
+              const data = event.data;
+              if (!data || !data.type) return;
+              if (data.type === "levelComplete") {
+                window.closePipePuzzle();
+                console.log(
+                  "Parent received levelComplete from PipePuzzle",
+                  data
+                );
+                try {
+                  if (
+                    window.runtime &&
+                    typeof window.runtime.callFunction === "function"
+                  ) {
+                    window.runtime.callFunction(
+                      "FromIframe",
+                      JSON.stringify(data)
+                    );
+                  } else if (typeof window.CallFunction === "function") {
+                    window.CallFunction("FromIframe", JSON.stringify(data));
+                  } else {
+                    console.warn(
+                      'Construct runtime.callFunction not found. Add a Function event "FromIframe" or adjust integration.'
+                    );
+                  }
+                } catch (e) {
+                  console.warn("Error calling Construct function:", e);
                 }
-              } catch (e) {
-                console.warn("Error calling Construct function:", e);
               }
+            } catch (e) {
+              console.warn(e);
             }
-          } catch (e) {
-            console.warn(e);
-          }
-        }, false);
+          },
+          false
+        );
 
-        console.log("PipePuzzle integration ready. Call window.openPipePuzzle() to open the embedded level.");
+        // If user manually taps resume overlay dismiss via keyboard (accessibility)
+        touchResume.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            hideTouchResumeOverlay();
+            setTimeout(() => wakeParentInput(3), 10);
+          }
+        });
+
+        console.log(
+          "PipePuzzle integration ready. Call window.openPipePuzzle() to open embedded level."
+        );
       })();
     </script>
   </body>
