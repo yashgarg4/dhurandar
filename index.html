@@ -1,135 +1,168 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <meta charset="UTF-8">
-	<title>Dhurandar</title>
-	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
-	
-	<!-- Made with Construct, the game and app creator :: https://www.construct.net -->
-	<meta name="generator" content="Scirra Construct">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Dhurandar</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no"
+    />
 
-	<meta name="author" content="JioGames">
+    <!-- Made with Construct, the game and app creator :: https://www.construct.net -->
+    <meta name="generator" content="Scirra Construct" />
 
-	<link rel="manifest" href="appmanifest.json">
-	<link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128.png">
-	<link rel="apple-touch-icon" sizes="256x256" href="icons/icon-256.png">
-	<link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png">
-	<link rel="icon" type="image/png" href="icons/icon-512.png">
+    <meta name="author" content="JioGames" />
 
-	<link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="appmanifest.json" />
+    <link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128.png" />
+    <link rel="apple-touch-icon" sizes="256x256" href="icons/icon-256.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png" />
+    <link rel="icon" type="image/png" href="icons/icon-512.png" />
 
+    <link rel="stylesheet" href="style.css" />
+  </head>
 
+  <body>
+    <script>
+      if (location.protocol.substr(0, 4) === "file") {
+        alert(
+          "Web exports won't work until you upload them. (When running on the file: protocol, browsers block many features from working for security reasons.)"
+        );
+      }
+    </script>
 
-</head> 
- 
-<body>
+    <noscript>
+      <div id="notSupportedWrap">
+        <h2 id="notSupportedTitle">This content requires JavaScript</h2>
+        <p class="notSupportedMessage">
+          JavaScript appears to be disabled. Please enable it to view this
+          content.
+        </p>
+      </div>
+    </noscript>
+    <script src="scripts/modernjscheck.js"></script>
+    <script src="scripts/supportcheck.js"></script>
+    <script src="scripts/offlineclient.js" type="module"></script>
+    <script src="scripts/main.js" type="module"></script>
+    <script src="scripts/register-sw.js" type="module"></script>
 
-	
+    <!-- PipePuzzle iframe overlay (added by integrator) -->
+    <style>
+      #pipepuzzle_iframe_wrap {
+        position: fixed;
+        left: 0;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 99999;
+      }
+      #pipepuzzle_iframe {
+        width: 960px;
+        height: 640px;
+        border: none;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
+        border-radius: 8px;
+      }
+      @media (max-width: 1000px) {
+        #pipepuzzle_iframe {
+          width: 100%;
+          height: 100%;
+        }
+      }
+    </style>
 
-<script>
-if (location.protocol.substr(0, 4) === "file")
-{
-	alert("Web exports won't work until you upload them. (When running on the file: protocol, browsers block many features from working for security reasons.)");
-}
-</script>
-	
-	<noscript>
-		<div id="notSupportedWrap">
-			<h2 id="notSupportedTitle">This content requires JavaScript</h2>
-			<p class="notSupportedMessage">JavaScript appears to be disabled. Please enable it to view this content.</p>
-		</div>
-	</noscript>
-	<script src="scripts/modernjscheck.js"></script>
-	<script src="scripts/supportcheck.js"></script>
-	<script src="scripts/offlineclient.js" type="module"></script>
-	<script src="scripts/main.js" type="module"></script>
-	<script src="scripts/register-sw.js" type="module"></script>
+    <div
+      id="pipepuzzle_iframe_wrap"
+      onclick="window.closePipePuzzle && window.closePipePuzzle()"
+    >
+      <iframe id="pipepuzzle_iframe" src="" title="PipePuzzle"></iframe>
+    </div>
 
+    <script>
+      // Integration script to open/close iframe and handle postMessage from PipePuzzle
+      (function () {
+        const iframeWrap = document.getElementById("pipepuzzle_iframe_wrap");
+        const iframe = document.getElementById("pipepuzzle_iframe");
 
-  <!-- PipePuzzle iframe overlay (added by integrator) -->
-  <style>
-    #pipepuzzle_iframe_wrap {
-      position: fixed;
-      left: 0; top: 0; right: 0; bottom: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      background: rgba(0,0,0,0.6);
-      z-index: 99999;
-    }
-    #pipepuzzle_iframe {
-      width: 960px;
-      height: 640px;
-      border: none;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.7);
-      border-radius: 8px;
-    }
-    @media (max-width: 1000px) {
-      #pipepuzzle_iframe { width: 95%; height: 70%; }
-    }
-  </style>
+        // Set this to the relative path inside exported build where PipePuzzlee is placed.
+        // We placed the PipePuzzlee folder next to Dhurandar folder in the exported package.
+        const PIPE_URL = "./PipePuzzlee/index.html";
 
-  <div id="pipepuzzle_iframe_wrap" onclick="window.closePipePuzzle && window.closePipePuzzle()">
-    <iframe id="pipepuzzle_iframe" src="" title="PipePuzzle"></iframe>
-  </div>
+        window.openPipePuzzle = function (url) {
+          iframe.src = url || PIPE_URL;
+          iframeWrap.style.display = "flex";
+          // try focusing iframe after load for keyboard input
+          iframe.addEventListener(
+            "load",
+            () => {
+              try {
+                iframe.contentWindow.focus();
+              } catch (e) {}
+            },
+            { once: true }
+          );
+        };
 
-  <script>
-    // Integration script to open/close iframe and handle postMessage from PipePuzzle
-    (function(){
-      const iframeWrap = document.getElementById('pipepuzzle_iframe_wrap');
-      const iframe = document.getElementById('pipepuzzle_iframe');
+        window.closePipePuzzle = function () {
+          iframe.src = "";
+          iframeWrap.style.display = "none";
+          // Notify Construct runtime if needed
+        };
 
-      // Set this to the relative path inside exported build where PipePuzzlee is placed.
-      // We placed the PipePuzzlee folder next to Dhurandar folder in the exported package.
-      const PIPE_URL = "./PipePuzzlee/index.html";
-
-      window.openPipePuzzle = function(url) {
-        iframe.src = url || PIPE_URL;
-        iframeWrap.style.display = "flex";
-        // try focusing iframe after load for keyboard input
-        iframe.addEventListener('load', ()=>{
-          try { iframe.contentWindow.focus(); } catch(e){}
-        }, { once: true });
-      };
-
-      window.closePipePuzzle = function(){
-        iframe.src = "";
-        iframeWrap.style.display = "none";
-        // Notify Construct runtime if needed
-      };
-
-      // Trusted origins - for now accept any origin from iframe for easier local testing.
-      // In production, set exact parentOrigin in the PipePuzzlee postMessage call and validate here.
-      window.addEventListener('message', function(event){
-        // For security, you can check event.origin here.
-        try {
-          const data = event.data;
-          if (!data || !data.type) return;
-          if (data.type === 'levelComplete') {
-            // Close iframe first
-            window.closePipePuzzle();
-            console.log('Parent received levelComplete from PipePuzzle', data);
-            // If Construct runtime is available, call a function named FromIframe with JSON string param
+        // Trusted origins - for now accept any origin from iframe for easier local testing.
+        // In production, set exact parentOrigin in the PipePuzzlee postMessage call and validate here.
+        window.addEventListener(
+          "message",
+          function (event) {
+            // For security, you can check event.origin here.
             try {
-              if (window.runtime && typeof window.runtime.callFunction === 'function') {
-                window.runtime.callFunction('FromIframe', JSON.stringify(data));
-              } else if (typeof window.CallFunction === 'function') {
-                // Older Construct versions may expose CallFunction
-                window.CallFunction('FromIframe', JSON.stringify(data));
-              } else {
-                console.warn('Construct runtime.callFunction not found. You need to add a Function event "FromIframe" or adjust integration.');
+              const data = event.data;
+              if (!data || !data.type) return;
+              if (data.type === "levelComplete") {
+                // Close iframe
+                window.closePipePuzzle();
+                console.log(
+                  "Parent received levelComplete from PipePuzzle",
+                  data
+                );
+                // If Construct runtime is available, call a function named FromIframe with JSON string param
+                try {
+                  if (
+                    window.runtime &&
+                    typeof window.runtime.callFunction === "function"
+                  ) {
+                    window.runtime.callFunction(
+                      "FromIframe",
+                      JSON.stringify(data)
+                    );
+                  } else if (typeof window.CallFunction === "function") {
+                    // Older Construct versions may expose CallFunction
+                    window.CallFunction("FromIframe", JSON.stringify(data));
+                  } else {
+                    console.warn(
+                      'Construct runtime.callFunction not found. You need to add a Function event "FromIframe" or adjust integration.'
+                    );
+                  }
+                } catch (e) {
+                  console.warn("Error calling Construct function:", e);
+                }
               }
-            } catch(e) {
-              console.warn('Error calling Construct function:', e);
+            } catch (e) {
+              console.warn(e);
             }
-          }
-        } catch(e){ console.warn(e); }
-      }, false);
+          },
+          false
+        );
 
-      // Debug helper in case you cannot trigger from Construct: expose button
-      console.log("PipePuzzle integration loaded. Call window.openPipePuzzle() to open the embedded level.");
-    })();
-  </script>
-
-</body> 
+        // Debug helper in case you cannot trigger from Construct: expose button
+        console.log(
+          "PipePuzzle integration loaded. Call window.openPipePuzzle() to open the embedded level."
+        );
+      })();
+    </script>
+  </body>
 </html>
